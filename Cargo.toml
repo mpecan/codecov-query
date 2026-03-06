@@ -1,0 +1,22 @@
+[package]
+name = "codecov-query"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/mpecan/codecov-query"
+description = "CLI tool to query the Codecov API v2 — coverage totals, commits, branches, PRs, comparisons, and more"
+keywords = ["codecov", "coverage", "api", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"

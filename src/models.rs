@@ -1,0 +1,387 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Paginated<T> {
+    pub count: Option<u64>,
+    pub next: Option<String>,
+    pub previous: Option<String>,
+    pub results: Vec<T>,
+    pub total_pages: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Totals {
+    pub files: Option<u64>,
+    pub lines: Option<u64>,
+    pub hits: Option<u64>,
+    pub misses: Option<u64>,
+    pub partials: Option<u64>,
+    pub coverage: Option<f64>,
+    pub branches: Option<u64>,
+    pub methods: Option<u64>,
+    pub complexity: Option<f64>,
+    pub complexity_total: Option<f64>,
+    pub complexity_ratio: Option<f64>,
+    pub diff: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Owner {
+    pub service: Option<String>,
+    pub username: Option<String>,
+    pub name: Option<String>,
+    pub service_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Repo {
+    pub name: Option<String>,
+    pub private: Option<bool>,
+    pub updatestamp: Option<String>,
+    pub author: Option<Owner>,
+    pub language: Option<String>,
+    pub branch: Option<String>,
+    pub active: Option<bool>,
+    pub activated: Option<bool>,
+    pub totals: Option<Totals>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Commit {
+    pub commitid: Option<String>,
+    pub message: Option<String>,
+    pub timestamp: Option<String>,
+    pub ci_passed: Option<bool>,
+    pub author: Option<CommitAuthor>,
+    pub branch: Option<String>,
+    pub totals: Option<Totals>,
+    pub state: Option<String>,
+    pub parent: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommitAuthor {
+    pub service: Option<String>,
+    pub username: Option<String>,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Branch {
+    pub name: Option<String>,
+    pub updatestamp: Option<String>,
+    pub head: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Pull {
+    pub pullid: Option<u64>,
+    pub title: Option<String>,
+    pub state: Option<String>,
+    pub updatestamp: Option<String>,
+    pub author: Option<serde_json::Value>,
+    pub base: Option<serde_json::Value>,
+    pub head: Option<serde_json::Value>,
+    pub ci_passed: Option<bool>,
+    pub comparedto: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Comparison {
+    pub base_commit: Option<String>,
+    pub head_commit: Option<String>,
+    pub totals: Option<TotalsComparison>,
+    pub commit_uploads: Option<serde_json::Value>,
+    pub diff: Option<serde_json::Value>,
+    pub files: Option<serde_json::Value>,
+    pub untracked: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TotalsComparison {
+    pub base: Option<Totals>,
+    pub head: Option<Totals>,
+    pub patch: Option<Totals>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileReport {
+    pub name: Option<String>,
+    pub totals: Option<Totals>,
+    pub line_coverage: Option<serde_json::Value>,
+    pub commit_sha: Option<String>,
+    pub commit_file_url: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Flag {
+    pub flag_name: Option<String>,
+    pub coverage: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Component {
+    #[serde(alias = "component_id")]
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub coverage: Option<f64>,
+}
+
+/// Wrapper for the totals endpoint which returns totals nested under a key.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TotalsResponse {
+    pub totals: Option<Totals>,
+    pub commit_sha: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_totals() {
+        let json = r#"{
+            "files": 42,
+            "lines": 1000,
+            "hits": 800,
+            "misses": 150,
+            "partials": 50,
+            "coverage": 80.0,
+            "branches": 100,
+            "methods": 200,
+            "complexity": 3.5,
+            "complexity_total": 700.0,
+            "complexity_ratio": 3.5,
+            "diff": null
+        }"#;
+        let totals: Totals = serde_json::from_str(json).unwrap();
+        assert_eq!(totals.files, Some(42));
+        assert_eq!(totals.coverage, Some(80.0));
+        assert!(totals.diff.is_none() || totals.diff.as_ref().unwrap().is_null());
+    }
+
+    #[test]
+    fn deserialize_totals_with_nulls() {
+        let json = r#"{
+            "files": null,
+            "lines": null,
+            "hits": null,
+            "misses": null,
+            "partials": null,
+            "coverage": null,
+            "branches": null,
+            "methods": null,
+            "complexity": null,
+            "complexity_total": null,
+            "complexity_ratio": null,
+            "diff": null
+        }"#;
+        let totals: Totals = serde_json::from_str(json).unwrap();
+        assert!(totals.files.is_none());
+        assert!(totals.coverage.is_none());
+    }
+
+    #[test]
+    fn deserialize_repo() {
+        let json = r#"{
+            "name": "my-repo",
+            "private": false,
+            "updatestamp": "2024-01-01T00:00:00Z",
+            "author": {
+                "service": "github",
+                "username": "owner",
+                "name": "Owner Name",
+                "service_id": "12345"
+            },
+            "language": "rust",
+            "branch": "main",
+            "active": true,
+            "activated": true,
+            "totals": {
+                "files": 10,
+                "lines": 500,
+                "hits": 400,
+                "misses": 80,
+                "partials": 20,
+                "coverage": 80.0,
+                "branches": 50,
+                "methods": 100,
+                "complexity": null,
+                "complexity_total": null,
+                "complexity_ratio": null,
+                "diff": null
+            }
+        }"#;
+        let repo: Repo = serde_json::from_str(json).unwrap();
+        assert_eq!(repo.name.as_deref(), Some("my-repo"));
+        assert_eq!(repo.active, Some(true));
+        assert_eq!(
+            repo.author.as_ref().unwrap().username.as_deref(),
+            Some("owner")
+        );
+        assert_eq!(repo.totals.as_ref().unwrap().coverage, Some(80.0));
+    }
+
+    #[test]
+    fn deserialize_paginated_repos() {
+        let json = r#"{
+            "count": 2,
+            "next": null,
+            "previous": null,
+            "results": [
+                {
+                    "name": "repo-a",
+                    "private": false,
+                    "updatestamp": null,
+                    "author": null,
+                    "language": null,
+                    "branch": "main",
+                    "active": true,
+                    "activated": true,
+                    "totals": null
+                },
+                {
+                    "name": "repo-b",
+                    "private": true,
+                    "updatestamp": null,
+                    "author": null,
+                    "language": "python",
+                    "branch": "master",
+                    "active": false,
+                    "activated": false,
+                    "totals": null
+                }
+            ],
+            "total_pages": 1
+        }"#;
+        let paginated: Paginated<Repo> = serde_json::from_str(json).unwrap();
+        assert_eq!(paginated.count, Some(2));
+        assert_eq!(paginated.results.len(), 2);
+        assert_eq!(paginated.results[0].name.as_deref(), Some("repo-a"));
+        assert_eq!(paginated.results[1].language.as_deref(), Some("python"));
+    }
+
+    #[test]
+    fn deserialize_commit() {
+        let json = r#"{
+            "commitid": "abc123def456",
+            "message": "fix: bug",
+            "timestamp": "2024-01-01T12:00:00Z",
+            "ci_passed": true,
+            "author": {
+                "service": "github",
+                "username": "dev",
+                "name": "Developer"
+            },
+            "branch": "main",
+            "totals": null,
+            "state": "complete",
+            "parent": "parent123"
+        }"#;
+        let commit: Commit = serde_json::from_str(json).unwrap();
+        assert_eq!(commit.commitid.as_deref(), Some("abc123def456"));
+        assert_eq!(commit.ci_passed, Some(true));
+        assert_eq!(commit.state.as_deref(), Some("complete"));
+    }
+
+    #[test]
+    fn deserialize_pull() {
+        let json = r#"{
+            "pullid": 42,
+            "title": "Add feature",
+            "state": "open",
+            "updatestamp": "2024-01-01T00:00:00Z",
+            "author": null,
+            "base": null,
+            "head": null,
+            "ci_passed": true,
+            "comparedto": "abc123"
+        }"#;
+        let pull: Pull = serde_json::from_str(json).unwrap();
+        assert_eq!(pull.pullid, Some(42));
+        assert_eq!(pull.title.as_deref(), Some("Add feature"));
+    }
+
+    #[test]
+    fn deserialize_comparison() {
+        let json = r#"{
+            "base_commit": "abc123",
+            "head_commit": "def456",
+            "totals": {
+                "base": { "files": 10, "lines": 100, "hits": 80, "misses": 15, "partials": 5, "coverage": 80.0, "branches": null, "methods": null, "complexity": null, "complexity_total": null, "complexity_ratio": null, "diff": null },
+                "head": { "files": 12, "lines": 120, "hits": 100, "misses": 15, "partials": 5, "coverage": 83.3, "branches": null, "methods": null, "complexity": null, "complexity_total": null, "complexity_ratio": null, "diff": null },
+                "patch": null
+            },
+            "commit_uploads": null,
+            "diff": null,
+            "files": null,
+            "untracked": null
+        }"#;
+        let cmp: Comparison = serde_json::from_str(json).unwrap();
+        assert_eq!(cmp.base_commit.as_deref(), Some("abc123"));
+        let totals = cmp.totals.unwrap();
+        assert_eq!(totals.base.as_ref().unwrap().coverage, Some(80.0));
+        assert_eq!(totals.head.as_ref().unwrap().coverage, Some(83.3));
+    }
+
+    #[test]
+    fn deserialize_flag() {
+        let json = r#"{"flag_name": "unit", "coverage": 85.5}"#;
+        let flag: Flag = serde_json::from_str(json).unwrap();
+        assert_eq!(flag.flag_name.as_deref(), Some("unit"));
+        assert_eq!(flag.coverage, Some(85.5));
+    }
+
+    #[test]
+    fn deserialize_component() {
+        let json = r#"{"component_id": "comp-1", "name": "Backend", "coverage": 92.1}"#;
+        let comp: Component = serde_json::from_str(json).unwrap();
+        assert_eq!(comp.id.as_deref(), Some("comp-1"));
+        assert_eq!(comp.coverage, Some(92.1));
+    }
+
+    #[test]
+    fn deserialize_file_report() {
+        let json = r#"{
+            "name": "src/main.rs",
+            "totals": { "files": 1, "lines": 50, "hits": 45, "misses": 5, "partials": 0, "coverage": 90.0, "branches": null, "methods": null, "complexity": null, "complexity_total": null, "complexity_ratio": null, "diff": null },
+            "line_coverage": [[1, 1], [2, 0], [3, 1]],
+            "commit_sha": "abc123",
+            "commit_file_url": "https://github.com/owner/repo/blob/abc123/src/main.rs"
+        }"#;
+        let report: FileReport = serde_json::from_str(json).unwrap();
+        assert_eq!(report.name.as_deref(), Some("src/main.rs"));
+        assert_eq!(report.totals.as_ref().unwrap().coverage, Some(90.0));
+    }
+
+    #[test]
+    fn deserialize_totals_response() {
+        let json = r#"{
+            "totals": { "files": 10, "lines": 100, "hits": 80, "misses": 15, "partials": 5, "coverage": 80.0, "branches": null, "methods": null, "complexity": null, "complexity_total": null, "complexity_ratio": null, "diff": null },
+            "commit_sha": "abc123"
+        }"#;
+        let resp: TotalsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.commit_sha.as_deref(), Some("abc123"));
+        assert_eq!(resp.totals.as_ref().unwrap().coverage, Some(80.0));
+    }
+
+    #[test]
+    fn deserialize_branch() {
+        let json = r#"{
+            "name": "feature/test",
+            "updatestamp": "2024-06-01T10:00:00Z",
+            "head": "abc123"
+        }"#;
+        let branch: Branch = serde_json::from_str(json).unwrap();
+        assert_eq!(branch.name.as_deref(), Some("feature/test"));
+    }
+
+    #[test]
+    fn deserialize_repo_missing_fields() {
+        let json = r#"{"name": "minimal"}"#;
+        let repo: Repo = serde_json::from_str(json).unwrap();
+        assert_eq!(repo.name.as_deref(), Some("minimal"));
+        assert!(repo.active.is_none());
+        assert!(repo.totals.is_none());
+    }
+}
