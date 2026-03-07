@@ -104,7 +104,7 @@ codecov-query totals --format json | jq '.totals.coverage'
 | `pulls` | List pull requests | `--state`, `--start-date`, `--ordering` |
 | `pull` | Get a specific PR | positional `pullid` |
 | `compare` | Compare coverage | `--base` + `--head` OR `--pullid`, `--summary` |
-| `pr-summary` | Comprehensive PR coverage summary | positional `pullid` |
+| `pr-summary` | PR coverage summary with uncovered line ranges | positional `pullid` |
 | `file-report` | File-level coverage | positional `path`, `--sha`, `--branch` |
 | `flags` | List flags | — |
 | `components` | List components | — |

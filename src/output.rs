@@ -1,5 +1,5 @@
 use crate::models::{
-    Branch, ChangedFileSummary, Commit, Comparison, Component, FileReport, Flag, Paginated,
+    self, Branch, ChangedFileSummary, Commit, Comparison, Component, FileReport, Flag, Paginated,
     PrSummary, Pull, Repo, Totals, TotalsResponse,
 };
 use serde::Serialize;
@@ -285,6 +285,10 @@ fn print_changed_files(files: &[ChangedFileSummary]) {
                 "  {}: {misses} uncovered lines (was {base_str}, now {head_str})",
                 file.path
             );
+            if !file.uncovered_lines.is_empty() {
+                let ranges = models::format_line_ranges(&file.uncovered_lines);
+                println!("    lines: {ranges}");
+            }
         }
     }
 }
@@ -470,6 +474,7 @@ mod tests {
                     base_coverage: Some(90.0),
                     head_coverage: Some(95.0),
                     status: "OK".to_string(),
+                    uncovered_lines: vec![],
                 },
                 ChangedFileSummary {
                     path: "src/ops.rs".to_string(),
@@ -480,6 +485,7 @@ mod tests {
                     base_coverage: Some(100.0),
                     head_coverage: Some(45.62),
                     status: "LOW COVERAGE".to_string(),
+                    uncovered_lines: vec![10, 11, 12, 15, 20, 21, 22, 23, 24, 30],
                 },
             ],
         };

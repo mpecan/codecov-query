@@ -231,6 +231,12 @@ fn comparison_file_to_summary(f: &models::ComparisonFile) -> ChangedFileSummary 
         .and_then(|t| t.head.as_ref())
         .and_then(|h| h.coverage);
 
+    let uncovered_lines = f
+        .lines
+        .as_ref()
+        .map(models::extract_uncovered_lines)
+        .unwrap_or_default();
+
     let file_status = match file_patch_coverage {
         Some(c) if c >= 50.0 => "OK",
         Some(_) => "LOW COVERAGE",
@@ -247,5 +253,6 @@ fn comparison_file_to_summary(f: &models::ComparisonFile) -> ChangedFileSummary 
         base_coverage: file_base_coverage,
         head_coverage: file_head_coverage,
         status: file_status,
+        uncovered_lines,
     }
 }

@@ -167,6 +167,86 @@ pub struct ChangedFileSummary {
     pub base_coverage: Option<f64>,
     pub head_coverage: Option<f64>,
     pub status: String,
+    pub uncovered_lines: Vec<u64>,
+}
+
+/// Extract uncovered (missed) line numbers from comparison file lines data.
+///
+/// The Codecov compare API returns lines as an array of arrays. Each entry
+/// has the line number as the first element and a head coverage indicator.
+/// We look at index 0 for line number and check remaining values for
+/// miss indicators (0, `"0"`, `"miss"`, `"0/N"`, or `null`).
+pub fn extract_uncovered_lines(lines: &serde_json::Value) -> Vec<u64> {
+    let Some(arr) = lines.as_array() else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    for entry in arr {
+        let Some(inner) = entry.as_array() else {
+            continue;
+        };
+        // Need at least a line number and one coverage value
+        if inner.len() < 2 {
+            continue;
+        }
+        let Some(line_no) = inner[0].as_u64() else {
+            continue;
+        };
+        // The head coverage is the last meaningful coverage value.
+        // Formats seen: [line, head_cov] or [line, base_cov, head_cov, ...]
+        // We check the last non-null-ish element for miss.
+        let cov_value = if inner.len() >= 3 {
+            &inner[2]
+        } else {
+            &inner[1]
+        };
+        if is_miss(cov_value) {
+            result.push(line_no);
+        }
+    }
+    result
+}
+
+fn is_miss(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::Number(n) => n.as_f64().is_some_and(|v| v == 0.0),
+        serde_json::Value::String(s) => s == "miss" || s == "0" || s.starts_with("0/"),
+        serde_json::Value::Bool(b) => !b,
+        _ => false,
+    }
+}
+
+/// Format line numbers as compact ranges: `[1, 2, 3, 5, 7, 8]` → `"1-3, 5, 7-8"`
+pub fn format_line_ranges(lines: &[u64]) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut sorted: Vec<u64> = lines.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+
+    let mut ranges: Vec<String> = Vec::new();
+    let mut start = sorted[0];
+    let mut end = start;
+
+    for &line in &sorted[1..] {
+        if line != end + 1 {
+            ranges.push(format_range(start, end));
+            start = line;
+        }
+        end = line;
+    }
+    ranges.push(format_range(start, end));
+    ranges.join(", ")
+}
+
+fn format_range(start: u64, end: u64) -> String {
+    if start == end {
+        start.to_string()
+    } else {
+        format!("{start}-{end}")
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -526,5 +606,60 @@ mod tests {
         assert_eq!(repo.name.as_deref(), Some("minimal"));
         assert!(repo.active.is_none());
         assert!(repo.totals.is_none());
+    }
+
+    #[test]
+    fn extract_uncovered_lines_two_element_format() {
+        // [line_no, coverage] where "miss" or 0 means uncovered
+        let lines: serde_json::Value =
+            serde_json::from_str(r#"[[1, "hit"], [2, "miss"], [3, 1], [4, 0], [5, null]]"#)
+                .unwrap();
+        let uncovered = extract_uncovered_lines(&lines);
+        assert_eq!(uncovered, vec![2, 4, 5]);
+    }
+
+    #[test]
+    fn extract_uncovered_lines_three_element_format() {
+        // [line_no, base_cov, head_cov]
+        let lines: serde_json::Value =
+            serde_json::from_str(r#"[[10, 1, 1], [11, 1, 0], [12, null, "miss"], [13, 0, 1]]"#)
+                .unwrap();
+        let uncovered = extract_uncovered_lines(&lines);
+        assert_eq!(uncovered, vec![11, 12]);
+    }
+
+    #[test]
+    fn extract_uncovered_lines_empty_and_invalid() {
+        assert!(extract_uncovered_lines(&serde_json::Value::Null).is_empty());
+        assert!(extract_uncovered_lines(&serde_json::json!([])).is_empty());
+        assert!(extract_uncovered_lines(&serde_json::json!([["not_a_number", 1]])).is_empty());
+    }
+
+    #[test]
+    fn extract_uncovered_lines_partial_fraction() {
+        let lines: serde_json::Value =
+            serde_json::from_str(r#"[[1, "0/2"], [2, "1/2"], [3, "2/2"]]"#).unwrap();
+        let uncovered = extract_uncovered_lines(&lines);
+        assert_eq!(uncovered, vec![1]);
+    }
+
+    #[test]
+    fn format_line_ranges_consecutive() {
+        assert_eq!(format_line_ranges(&[1, 2, 3, 5, 7, 8, 9]), "1-3, 5, 7-9");
+    }
+
+    #[test]
+    fn format_line_ranges_single() {
+        assert_eq!(format_line_ranges(&[42]), "42");
+    }
+
+    #[test]
+    fn format_line_ranges_empty() {
+        assert_eq!(format_line_ranges(&[]), "");
+    }
+
+    #[test]
+    fn format_line_ranges_unsorted_with_dupes() {
+        assert_eq!(format_line_ranges(&[5, 3, 3, 1, 2, 4]), "1-5");
     }
 }
