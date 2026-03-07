@@ -9,12 +9,12 @@ Contributions of all kinds are welcome — bug reports, new features, documentat
 ```sh
 git clone https://github.com/mpecan/codecov-query
 cd codecov-query
-git config core.hooksPath .githooks
+just setup   # enables git hooks for fmt/clippy checks on commit
 cargo build
 cargo test
 ```
 
-The `git config` line enables the shared pre-commit hook that runs `cargo fmt --check` and `cargo clippy` before each commit.
+> **Note:** [just](https://github.com/casey/just) is the recommended task runner. Run `just` to see all available recipes. If you don't have it, the `just setup` step is equivalent to `git config core.hooksPath .githooks`.
 
 The project requires Rust 1.93.0 or later. See `rust-toolchain.toml` for the pinned version.
 
@@ -52,12 +52,16 @@ Keep commits atomic — one logical change per commit.
 Before opening a PR:
 
 ```sh
-cargo fmt
-cargo clippy --all-targets -- -D warnings
-cargo test
+just check   # runs fmt --check, clippy, and tests
 ```
 
-All three must pass clean. CI runs the same checks.
+Or fix formatting and run checks in one go:
+
+```sh
+just fix-and-check
+```
+
+All three checks (fmt, clippy, tests) must pass clean. CI runs the same checks. The pre-commit hook also enforces fmt and clippy on every commit.
 
 ### Lint rules
 
