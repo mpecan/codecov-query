@@ -9,9 +9,12 @@ Contributions of all kinds are welcome — bug reports, new features, documentat
 ```sh
 git clone https://github.com/mpecan/codecov-query
 cd codecov-query
+git config core.hooksPath .githooks
 cargo build
 cargo test
 ```
+
+The `git config` line enables the shared pre-commit hook that runs `cargo fmt --check` and `cargo clippy` before each commit.
 
 The project requires Rust 1.93.0 or later. See `rust-toolchain.toml` for the pinned version.
 

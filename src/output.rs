@@ -278,9 +278,9 @@ fn print_changed_files(files: &[ChangedFileSummary]) {
         println!();
         println!("Files needing coverage:");
         for file in &needs_coverage {
-            let misses_str =
-                file.patch_misses
-                    .map_or_else(|| "N/A".to_string(), |m| format!("{m}"));
+            let misses_str = file
+                .patch_misses
+                .map_or_else(|| "N/A".to_string(), |m| format!("{m}"));
             let base_str = format_coverage_pct(file.base_coverage);
             let head_str = format_coverage_pct(file.head_coverage);
             println!(
