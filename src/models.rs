@@ -87,14 +87,86 @@ pub struct Pull {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct ComparisonFileName {
+    pub base: Option<String>,
+    pub head: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileStats {
+    pub added: Option<u64>,
+    pub removed: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileTotals {
+    pub base: Option<Totals>,
+    pub head: Option<Totals>,
+    pub patch: Option<Totals>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ComparisonFile {
+    pub name: Option<ComparisonFileName>,
+    pub has_diff: Option<bool>,
+    pub stats: Option<FileStats>,
+    pub totals: Option<FileTotals>,
+    pub change_summary: Option<serde_json::Value>,
+    pub lines: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Comparison {
     pub base_commit: Option<String>,
     pub head_commit: Option<String>,
     pub totals: Option<TotalsComparison>,
     pub commit_uploads: Option<serde_json::Value>,
     pub diff: Option<serde_json::Value>,
-    pub files: Option<serde_json::Value>,
+    pub files: Option<Vec<ComparisonFile>>,
     pub untracked: Option<serde_json::Value>,
+}
+
+impl Comparison {
+    pub fn into_summary(mut self) -> Self {
+        if let Some(files) = &mut self.files {
+            files.retain(|f| f.has_diff == Some(true));
+            for file in files.iter_mut() {
+                file.lines = None;
+            }
+        }
+        self.commit_uploads = None;
+        self.diff = None;
+        self.untracked = None;
+        self
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrSummary {
+    pub pullid: u64,
+    pub title: Option<String>,
+    pub state: Option<String>,
+    pub ci_passed: Option<bool>,
+    pub base_coverage: Option<f64>,
+    pub head_coverage: Option<f64>,
+    pub coverage_delta: Option<f64>,
+    pub patch_coverage: Option<f64>,
+    pub patch_hits: Option<u64>,
+    pub patch_lines: Option<u64>,
+    pub status: String,
+    pub changed_files: Vec<ChangedFileSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChangedFileSummary {
+    pub path: String,
+    pub patch_coverage: Option<f64>,
+    pub patch_hits: Option<u64>,
+    pub patch_lines: Option<u64>,
+    pub patch_misses: Option<u64>,
+    pub base_coverage: Option<f64>,
+    pub head_coverage: Option<f64>,
+    pub status: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -322,6 +394,77 @@ mod tests {
         let totals = cmp.totals.unwrap();
         assert_eq!(totals.base.as_ref().unwrap().coverage, Some(80.0));
         assert_eq!(totals.head.as_ref().unwrap().coverage, Some(83.3));
+    }
+
+    #[test]
+    fn deserialize_comparison_with_files() {
+        let json = r#"{
+            "base_commit": "abc123",
+            "head_commit": "def456",
+            "totals": { "base": null, "head": null, "patch": null },
+            "commit_uploads": null,
+            "diff": null,
+            "files": [
+                {
+                    "name": { "base": "src/lib.rs", "head": "src/lib.rs" },
+                    "has_diff": true,
+                    "stats": { "added": 10, "removed": 2 },
+                    "totals": {
+                        "base": { "files": 1, "lines": 50, "hits": 45, "misses": 5, "partials": 0, "coverage": 90.0, "branches": null, "methods": null, "complexity": null, "complexity_total": null, "complexity_ratio": null, "diff": null },
+                        "head": { "files": 1, "lines": 58, "hits": 50, "misses": 8, "partials": 0, "coverage": 86.2, "branches": null, "methods": null, "complexity": null, "complexity_total": null, "complexity_ratio": null, "diff": null },
+                        "patch": { "files": 1, "lines": 10, "hits": 8, "misses": 2, "partials": 0, "coverage": 80.0, "branches": null, "methods": null, "complexity": null, "complexity_total": null, "complexity_ratio": null, "diff": null }
+                    },
+                    "change_summary": null,
+                    "lines": [[1, "hit"], [2, "miss"]]
+                },
+                {
+                    "name": { "base": "src/utils.rs", "head": "src/utils.rs" },
+                    "has_diff": false,
+                    "stats": null,
+                    "totals": null,
+                    "change_summary": null,
+                    "lines": null
+                }
+            ],
+            "untracked": null
+        }"#;
+        let cmp: Comparison = serde_json::from_str(json).unwrap();
+        let files = cmp.files.as_ref().unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].has_diff, Some(true));
+        assert_eq!(files[1].has_diff, Some(false));
+        assert_eq!(
+            files[0].name.as_ref().unwrap().head.as_deref(),
+            Some("src/lib.rs")
+        );
+    }
+
+    #[test]
+    fn comparison_into_summary_filters_files() {
+        let json = r#"{
+            "base_commit": "abc",
+            "head_commit": "def",
+            "totals": { "base": null, "head": null, "patch": null },
+            "commit_uploads": { "some": "data" },
+            "diff": { "some": "diff" },
+            "files": [
+                { "name": { "base": "a.rs", "head": "a.rs" }, "has_diff": true, "stats": null, "totals": null, "change_summary": null, "lines": [[1, "hit"]] },
+                { "name": { "base": "b.rs", "head": "b.rs" }, "has_diff": false, "stats": null, "totals": null, "change_summary": null, "lines": null }
+            ],
+            "untracked": { "some": "data" }
+        }"#;
+        let cmp: Comparison = serde_json::from_str(json).unwrap();
+        let summary = cmp.into_summary();
+        assert!(summary.commit_uploads.is_none());
+        assert!(summary.diff.is_none());
+        assert!(summary.untracked.is_none());
+        let files = summary.files.unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            files[0].name.as_ref().unwrap().head.as_deref(),
+            Some("a.rs")
+        );
+        assert!(files[0].lines.is_none());
     }
 
     #[test]
