@@ -41,8 +41,8 @@ When run inside a git repository, `codecov-query` automatically detects the owne
 
 ### Output formats
 
-- `--format json` (default) — structured JSON, ideal for piping to `jq` or feeding to LLMs
-- `--format text` — human-readable summary
+- `--format text` (default) — human-readable summary, compact and agent-friendly
+- `--format json` — structured JSON, ideal for piping to `jq` or feeding to LLMs
 
 ### Examples
 
@@ -73,7 +73,11 @@ codecov-query pull 42
 
 # Compare coverage
 codecov-query compare --pullid 42
+codecov-query compare --pullid 42 --summary   # filtered to changed files only
 codecov-query compare --base abc123 --head def456
+
+# PR coverage summary (combines pull + compare into one view)
+codecov-query pr-summary 42
 
 # File-level coverage
 codecov-query file-report src/main.rs --branch main
@@ -82,8 +86,8 @@ codecov-query file-report src/main.rs --branch main
 codecov-query flags
 codecov-query components
 
-# Pipe to jq
-codecov-query totals | jq '.totals.coverage'
+# Pipe to jq (use --format json for structured output)
+codecov-query totals --format json | jq '.totals.coverage'
 ```
 
 ## Subcommands
@@ -99,7 +103,8 @@ codecov-query totals | jq '.totals.coverage'
 | `branch` | Get a specific branch | positional `name` |
 | `pulls` | List pull requests | `--state`, `--start-date`, `--ordering` |
 | `pull` | Get a specific PR | positional `pullid` |
-| `compare` | Compare coverage | `--base` + `--head` OR `--pullid` |
+| `compare` | Compare coverage | `--base` + `--head` OR `--pullid`, `--summary` |
+| `pr-summary` | PR coverage summary with uncovered line ranges | positional `pullid` |
 | `file-report` | File-level coverage | positional `path`, `--sha`, `--branch` |
 | `flags` | List flags | — |
 | `components` | List components | — |
@@ -114,7 +119,7 @@ All list subcommands support `--page` and `--page-size` for pagination.
 | `--service` | Git hosting service | `github` |
 | `--owner` / `-o` | Repository owner | auto-detected |
 | `--repo` / `-r` | Repository name | auto-detected |
-| `--format` | Output format (`json` or `text`) | `json` |
+| `--format` | Output format (`json` or `text`) | `text` |
 
 Supported services: `github`, `gitlab`, `bitbucket`, `github-enterprise`, `gitlab-enterprise`, `bitbucket-server`.
 

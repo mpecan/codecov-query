@@ -87,14 +87,189 @@ pub struct Pull {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct ComparisonFileName {
+    pub base: Option<String>,
+    pub head: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileStats {
+    pub added: Option<u64>,
+    pub removed: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileTotals {
+    pub base: Option<Totals>,
+    pub head: Option<Totals>,
+    pub patch: Option<Totals>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ComparisonFile {
+    pub name: Option<ComparisonFileName>,
+    pub has_diff: Option<bool>,
+    pub stats: Option<FileStats>,
+    pub totals: Option<FileTotals>,
+    pub change_summary: Option<serde_json::Value>,
+    pub lines: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Comparison {
     pub base_commit: Option<String>,
     pub head_commit: Option<String>,
     pub totals: Option<TotalsComparison>,
     pub commit_uploads: Option<serde_json::Value>,
     pub diff: Option<serde_json::Value>,
-    pub files: Option<serde_json::Value>,
+    pub files: Option<Vec<ComparisonFile>>,
     pub untracked: Option<serde_json::Value>,
+}
+
+impl Comparison {
+    pub fn into_summary(mut self) -> Self {
+        if let Some(files) = &mut self.files {
+            files.retain(|f| f.has_diff == Some(true));
+            for file in files.iter_mut() {
+                file.lines = None;
+                file.change_summary = None;
+            }
+        }
+        self.commit_uploads = None;
+        self.diff = None;
+        self.untracked = None;
+        self
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrSummary {
+    pub pullid: u64,
+    pub title: Option<String>,
+    pub state: Option<String>,
+    pub ci_passed: Option<bool>,
+    pub base_coverage: Option<f64>,
+    pub head_coverage: Option<f64>,
+    pub coverage_delta: Option<f64>,
+    pub patch_coverage: Option<f64>,
+    pub patch_hits: Option<u64>,
+    pub patch_lines: Option<u64>,
+    pub status: String,
+    pub changed_files: Vec<ChangedFileSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChangedFileSummary {
+    pub path: String,
+    pub patch_coverage: Option<f64>,
+    pub patch_hits: Option<u64>,
+    pub patch_lines: Option<u64>,
+    pub patch_misses: Option<u64>,
+    pub base_coverage: Option<f64>,
+    pub head_coverage: Option<f64>,
+    pub status: String,
+    pub uncovered_lines: Vec<u64>,
+}
+
+/// Extract uncovered (missed) line numbers from comparison file lines data.
+///
+/// The Codecov compare API returns lines as an array of objects:
+/// ```json
+/// {"number": {"head": 42}, "coverage": {"head": 0}, "added": true, ...}
+/// ```
+/// When `added_only` is true, only lines with `"added": true` are considered
+/// (i.e. new patch lines). A line is "missed" when `coverage.head` is `0`.
+/// Lines with `null` head coverage have no data and are skipped.
+///
+/// Also handles the legacy array-of-arrays format for robustness.
+pub fn extract_uncovered_lines(lines: &serde_json::Value, added_only: bool) -> Vec<u64> {
+    let Some(arr) = lines.as_array() else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    for entry in arr {
+        if let Some(line_no) = extract_from_object(entry, added_only) {
+            result.push(line_no);
+        } else if let Some(line_no) = extract_from_array(entry) {
+            result.push(line_no);
+        }
+    }
+    result
+}
+
+/// Object format: `{"number": {"head": N}, "coverage": {"head": 0}, "added": bool}`
+fn extract_from_object(entry: &serde_json::Value, added_only: bool) -> Option<u64> {
+    let obj = entry.as_object()?;
+    if added_only && !obj.get("added")?.as_bool().unwrap_or(false) {
+        return None;
+    }
+    let line_no = obj.get("number")?.get("head")?.as_u64()?;
+    let head_cov = obj.get("coverage")?.get("head")?;
+    if is_miss(head_cov) && !head_cov.is_null() {
+        Some(line_no)
+    } else {
+        None
+    }
+}
+
+/// Array format: `[line_no, cov]` or `[line_no, base_cov, head_cov]`
+fn extract_from_array(entry: &serde_json::Value) -> Option<u64> {
+    let inner = entry.as_array()?;
+    if inner.len() < 2 {
+        return None;
+    }
+    let line_no = inner[0].as_u64()?;
+    let cov_value = if inner.len() >= 3 {
+        &inner[2]
+    } else {
+        &inner[1]
+    };
+    if is_miss(cov_value) {
+        Some(line_no)
+    } else {
+        None
+    }
+}
+
+fn is_miss(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Number(n) => n.as_f64().is_some_and(|v| v == 0.0),
+        serde_json::Value::String(s) => s == "miss" || s == "0" || s.starts_with("0/"),
+        serde_json::Value::Bool(b) => !b,
+        _ => false,
+    }
+}
+
+/// Format line numbers as compact ranges: `[1, 2, 3, 5, 7, 8]` → `"1-3, 5, 7-8"`
+pub fn format_line_ranges(lines: &[u64]) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut sorted: Vec<u64> = lines.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+
+    let mut ranges: Vec<String> = Vec::new();
+    let mut start = sorted[0];
+    let mut end = start;
+
+    for &line in &sorted[1..] {
+        if line != end + 1 {
+            ranges.push(format_range(start, end));
+            start = line;
+        }
+        end = line;
+    }
+    ranges.push(format_range(start, end));
+    ranges.join(", ")
+}
+
+fn format_range(start: u64, end: u64) -> String {
+    if start == end {
+        start.to_string()
+    } else {
+        format!("{start}-{end}")
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -325,6 +500,78 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_comparison_with_files() {
+        let json = r#"{
+            "base_commit": "abc123",
+            "head_commit": "def456",
+            "totals": { "base": null, "head": null, "patch": null },
+            "commit_uploads": null,
+            "diff": null,
+            "files": [
+                {
+                    "name": { "base": "src/lib.rs", "head": "src/lib.rs" },
+                    "has_diff": true,
+                    "stats": { "added": 10, "removed": 2 },
+                    "totals": {
+                        "base": { "files": 1, "lines": 50, "hits": 45, "misses": 5, "partials": 0, "coverage": 90.0, "branches": null, "methods": null, "complexity": null, "complexity_total": null, "complexity_ratio": null, "diff": null },
+                        "head": { "files": 1, "lines": 58, "hits": 50, "misses": 8, "partials": 0, "coverage": 86.2, "branches": null, "methods": null, "complexity": null, "complexity_total": null, "complexity_ratio": null, "diff": null },
+                        "patch": { "files": 1, "lines": 10, "hits": 8, "misses": 2, "partials": 0, "coverage": 80.0, "branches": null, "methods": null, "complexity": null, "complexity_total": null, "complexity_ratio": null, "diff": null }
+                    },
+                    "change_summary": null,
+                    "lines": [[1, "hit"], [2, "miss"]]
+                },
+                {
+                    "name": { "base": "src/utils.rs", "head": "src/utils.rs" },
+                    "has_diff": false,
+                    "stats": null,
+                    "totals": null,
+                    "change_summary": null,
+                    "lines": null
+                }
+            ],
+            "untracked": null
+        }"#;
+        let cmp: Comparison = serde_json::from_str(json).unwrap();
+        let files = cmp.files.as_ref().unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].has_diff, Some(true));
+        assert_eq!(files[1].has_diff, Some(false));
+        assert_eq!(
+            files[0].name.as_ref().unwrap().head.as_deref(),
+            Some("src/lib.rs")
+        );
+    }
+
+    #[test]
+    fn comparison_into_summary_filters_files() {
+        let json = r#"{
+            "base_commit": "abc",
+            "head_commit": "def",
+            "totals": { "base": null, "head": null, "patch": null },
+            "commit_uploads": { "some": "data" },
+            "diff": { "some": "diff" },
+            "files": [
+                { "name": { "base": "a.rs", "head": "a.rs" }, "has_diff": true, "stats": null, "totals": null, "change_summary": { "some": "data" }, "lines": [[1, "hit"]] },
+                { "name": { "base": "b.rs", "head": "b.rs" }, "has_diff": false, "stats": null, "totals": null, "change_summary": null, "lines": null }
+            ],
+            "untracked": { "some": "data" }
+        }"#;
+        let cmp: Comparison = serde_json::from_str(json).unwrap();
+        let summary = cmp.into_summary();
+        assert!(summary.commit_uploads.is_none());
+        assert!(summary.diff.is_none());
+        assert!(summary.untracked.is_none());
+        let files = summary.files.unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            files[0].name.as_ref().unwrap().head.as_deref(),
+            Some("a.rs")
+        );
+        assert!(files[0].lines.is_none());
+        assert!(files[0].change_summary.is_none());
+    }
+
+    #[test]
     fn deserialize_flag() {
         let json = r#"{"flag_name": "unit", "coverage": 85.5}"#;
         let flag: Flag = serde_json::from_str(json).unwrap();
@@ -383,5 +630,101 @@ mod tests {
         assert_eq!(repo.name.as_deref(), Some("minimal"));
         assert!(repo.active.is_none());
         assert!(repo.totals.is_none());
+    }
+
+    #[test]
+    fn extract_uncovered_lines_object_format_all() {
+        // Real Codecov API format, added_only=false
+        let lines: serde_json::Value = serde_json::from_str(
+            r#"[
+                {"number": {"base": 10, "head": 10}, "coverage": {"base": null, "head": 1}, "added": false},
+                {"number": {"base": 11, "head": 11}, "coverage": {"base": null, "head": 0}, "added": false},
+                {"number": {"base": null, "head": 12}, "coverage": {"base": null, "head": 0}, "added": true},
+                {"number": {"base": 13, "head": 13}, "coverage": {"base": null, "head": null}, "added": true},
+                {"number": {"base": 14, "head": 14}, "coverage": {"base": 0, "head": 1}, "added": true}
+            ]"#,
+        )
+        .unwrap();
+        let uncovered = extract_uncovered_lines(&lines, false);
+        assert_eq!(uncovered, vec![11, 12]);
+    }
+
+    #[test]
+    fn extract_uncovered_lines_object_format_added_only() {
+        let lines: serde_json::Value = serde_json::from_str(
+            r#"[
+                {"number": {"base": 10, "head": 10}, "coverage": {"base": null, "head": 0}, "added": false},
+                {"number": {"base": null, "head": 11}, "coverage": {"base": null, "head": 0}, "added": true},
+                {"number": {"base": null, "head": 12}, "coverage": {"base": null, "head": 1}, "added": true}
+            ]"#,
+        )
+        .unwrap();
+        // Only added lines with head=0
+        let uncovered = extract_uncovered_lines(&lines, true);
+        assert_eq!(uncovered, vec![11]);
+    }
+
+    #[test]
+    fn extract_uncovered_lines_array_format() {
+        // Legacy/alternative array format
+        let lines: serde_json::Value =
+            serde_json::from_str(r#"[[1, "hit"], [2, "miss"], [3, 1], [4, 0]]"#).unwrap();
+        let uncovered = extract_uncovered_lines(&lines, false);
+        assert_eq!(uncovered, vec![2, 4]);
+    }
+
+    #[test]
+    fn extract_uncovered_lines_array_format_with_added_only() {
+        // Array format has no "added" info, so all misses are included as fallback
+        let lines: serde_json::Value =
+            serde_json::from_str(r#"[[1, 1], [2, 0], [3, "miss"]]"#).unwrap();
+        let uncovered = extract_uncovered_lines(&lines, true);
+        assert_eq!(uncovered, vec![2, 3]);
+    }
+
+    #[test]
+    fn extract_uncovered_lines_three_element_format() {
+        let lines: serde_json::Value =
+            serde_json::from_str(r#"[[10, 1, 1], [11, 1, 0], [12, null, "miss"], [13, 0, 1]]"#)
+                .unwrap();
+        let uncovered = extract_uncovered_lines(&lines, false);
+        assert_eq!(uncovered, vec![11, 12]);
+    }
+
+    #[test]
+    fn extract_uncovered_lines_empty_and_invalid() {
+        assert!(extract_uncovered_lines(&serde_json::Value::Null, false).is_empty());
+        assert!(extract_uncovered_lines(&serde_json::json!([]), false).is_empty());
+        assert!(
+            extract_uncovered_lines(&serde_json::json!([["not_a_number", 1]]), false).is_empty()
+        );
+    }
+
+    #[test]
+    fn extract_uncovered_lines_partial_fraction() {
+        let lines: serde_json::Value =
+            serde_json::from_str(r#"[[1, "0/2"], [2, "1/2"], [3, "2/2"]]"#).unwrap();
+        let uncovered = extract_uncovered_lines(&lines, false);
+        assert_eq!(uncovered, vec![1]);
+    }
+
+    #[test]
+    fn format_line_ranges_consecutive() {
+        assert_eq!(format_line_ranges(&[1, 2, 3, 5, 7, 8, 9]), "1-3, 5, 7-9");
+    }
+
+    #[test]
+    fn format_line_ranges_single() {
+        assert_eq!(format_line_ranges(&[42]), "42");
+    }
+
+    #[test]
+    fn format_line_ranges_empty() {
+        assert_eq!(format_line_ranges(&[]), "");
+    }
+
+    #[test]
+    fn format_line_ranges_unsorted_with_dupes() {
+        assert_eq!(format_line_ranges(&[5, 3, 3, 1, 2, 4]), "1-5");
     }
 }

@@ -49,7 +49,7 @@ pub struct Cli {
     pub repo: Option<String>,
 
     /// Output format
-    #[arg(long, default_value = "json", global = true)]
+    #[arg(long, default_value = "text", global = true)]
     pub format: OutputFormat,
 
     #[command(subcommand)]
@@ -170,6 +170,15 @@ pub enum Command {
         /// Pull request ID (alternative to --base/--head)
         #[arg(long, conflicts_with_all = ["base", "head"])]
         pullid: Option<u64>,
+        /// Show only changed files with coverage summary (strip noise)
+        #[arg(long)]
+        summary: bool,
+    },
+
+    /// Get a comprehensive PR coverage summary
+    PrSummary {
+        /// Pull request ID
+        pullid: u64,
     },
 
     /// Get file-level coverage report
@@ -255,10 +264,17 @@ mod tests {
     #[test]
     fn parse_compare_with_pullid() {
         let cli = Cli::parse_from(["cov-info", "--token", "t", "compare", "--pullid", "42"]);
-        if let Command::Compare { pullid, base, head } = cli.command {
+        if let Command::Compare {
+            pullid,
+            base,
+            head,
+            summary,
+        } = cli.command
+        {
             assert_eq!(pullid, Some(42));
             assert!(base.is_none());
             assert!(head.is_none());
+            assert!(!summary);
         } else {
             panic!("expected Compare");
         }
@@ -269,13 +285,54 @@ mod tests {
         let cli = Cli::parse_from([
             "cov-info", "--token", "t", "compare", "--base", "abc", "--head", "def",
         ]);
-        if let Command::Compare { base, head, pullid } = cli.command {
+        if let Command::Compare {
+            base,
+            head,
+            pullid,
+            summary,
+        } = cli.command
+        {
             assert_eq!(base.as_deref(), Some("abc"));
             assert_eq!(head.as_deref(), Some("def"));
             assert!(pullid.is_none());
+            assert!(!summary);
         } else {
             panic!("expected Compare");
         }
+    }
+
+    #[test]
+    fn parse_compare_with_summary() {
+        let cli = Cli::parse_from([
+            "cov-info",
+            "--token",
+            "t",
+            "compare",
+            "--pullid",
+            "42",
+            "--summary",
+        ]);
+        if let Command::Compare { summary, .. } = cli.command {
+            assert!(summary);
+        } else {
+            panic!("expected Compare");
+        }
+    }
+
+    #[test]
+    fn parse_pr_summary() {
+        let cli = Cli::parse_from(["cov-info", "--token", "t", "pr-summary", "42"]);
+        if let Command::PrSummary { pullid } = cli.command {
+            assert_eq!(pullid, 42);
+        } else {
+            panic!("expected PrSummary");
+        }
+    }
+
+    #[test]
+    fn default_format_is_text() {
+        let cli = Cli::parse_from(["cov-info", "--token", "t", "components"]);
+        assert!(matches!(cli.format, OutputFormat::Text));
     }
 
     #[test]

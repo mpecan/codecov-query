@@ -1,6 +1,6 @@
 use crate::models::{
-    Branch, Commit, Comparison, Component, FileReport, Flag, Paginated, Pull, Repo, Totals,
-    TotalsResponse,
+    self, Branch, ChangedFileSummary, Commit, Comparison, Component, FileReport, Flag, Paginated,
+    PrSummary, Pull, Repo, Totals, TotalsResponse,
 };
 use serde::Serialize;
 
@@ -194,6 +194,111 @@ impl TextFormat for Comparison {
                 println!("  Patch coverage: {cov:.2}%");
             }
         }
+        if let Some(files) = &self.files {
+            let changed: Vec<_> = files.iter().filter(|f| f.has_diff == Some(true)).collect();
+            if !changed.is_empty() {
+                println!("\nChanged files ({}):", changed.len());
+                for file in &changed {
+                    let path = file
+                        .name
+                        .as_ref()
+                        .and_then(|n| n.head.as_deref().or(n.base.as_deref()))
+                        .unwrap_or("unknown");
+                    let patch_cov = file
+                        .totals
+                        .as_ref()
+                        .and_then(|t| t.patch.as_ref())
+                        .and_then(|p| p.coverage);
+                    let patch_str =
+                        patch_cov.map_or_else(|| "N/A".to_string(), |c| format!("{c:.2}%"));
+                    println!("  {path}: patch {patch_str}");
+                }
+            }
+        }
+    }
+}
+
+fn format_coverage_pct(value: Option<f64>) -> String {
+    value.map_or_else(|| "N/A".to_string(), |c| format!("{c:.2}%"))
+}
+
+impl TextFormat for PrSummary {
+    fn print_text(&self) {
+        let title = self.title.as_deref().unwrap_or("(no title)");
+        println!("PR #{}: {title}", self.pullid);
+
+        let state = self.state.as_deref().unwrap_or("unknown");
+        let ci = self
+            .ci_passed
+            .map_or("unknown", |p| if p { "passed" } else { "failed" });
+        println!("State: {state} | CI: {ci}");
+        println!();
+
+        match (self.base_coverage, self.head_coverage) {
+            (Some(base), Some(head)) => {
+                let delta = self.coverage_delta.unwrap_or(head - base);
+                println!("Coverage: {base:.2}% -> {head:.2}% (delta {delta:+.2}%)");
+            }
+            (_, Some(head)) => println!("Coverage: {head:.2}%"),
+            _ => println!("Coverage: N/A"),
+        }
+
+        if let Some(patch_cov) = self.patch_coverage {
+            let hits = self.patch_hits.unwrap_or(0);
+            let lines = self.patch_lines.unwrap_or(0);
+            println!("Patch: {patch_cov:.2}% ({hits}/{lines} lines)");
+        }
+
+        println!("Status: [{}]", self.status);
+        println!();
+
+        if !self.changed_files.is_empty() {
+            print_changed_files(&self.changed_files);
+        }
+    }
+}
+
+fn print_changed_files(files: &[ChangedFileSummary]) {
+    println!("Changed files:");
+    for file in files {
+        let patch_str = format_coverage_pct(file.patch_coverage);
+        let lines_str = file.patch_lines.map_or_else(String::new, |l| {
+            let hits = file.patch_hits.unwrap_or(0);
+            format!("{hits}/{l} lines")
+        });
+        println!(
+            "  [{status}]  {path}  {patch_str}  {lines_str}",
+            status = file.status,
+            path = file.path,
+        );
+    }
+
+    let needs_coverage: Vec<_> = files.iter().filter(|f| f.status != "OK").collect();
+    if !needs_coverage.is_empty() {
+        println!();
+        println!("Files needing coverage:");
+        for file in &needs_coverage {
+            let misses_str = file
+                .patch_misses
+                .map_or_else(|| "N/A".to_string(), |m| format!("{m}"));
+            let base_str = format_coverage_pct(file.base_coverage);
+            let head_str = format_coverage_pct(file.head_coverage);
+            println!(
+                "  {}: {misses_str} uncovered lines (was {base_str}, now {head_str})",
+                file.path
+            );
+            if !file.uncovered_lines.is_empty() {
+                let ranges = models::format_line_ranges(&file.uncovered_lines);
+                println!("    lines: {ranges}");
+            }
+        }
+    }
+}
+
+impl TextFormat for ChangedFileSummary {
+    fn print_text(&self) {
+        let patch_str = format_coverage_pct(self.patch_coverage);
+        println!("[{}] {}: {patch_str}", self.status, self.path);
     }
 }
 
@@ -342,6 +447,104 @@ mod tests {
             commit_uploads: None,
             diff: None,
             files: None,
+            untracked: None,
+        };
+        cmp.print_text();
+    }
+
+    #[test]
+    fn text_format_pr_summary() {
+        let summary = PrSummary {
+            pullid: 107,
+            title: Some("Add feature".to_string()),
+            state: Some("open".to_string()),
+            ci_passed: Some(true),
+            base_coverage: Some(89.50),
+            head_coverage: Some(88.97),
+            coverage_delta: Some(-0.53),
+            patch_coverage: Some(39.79),
+            patch_hits: Some(78),
+            patch_lines: Some(196),
+            status: "COVERAGE DECREASED".to_string(),
+            changed_files: vec![
+                ChangedFileSummary {
+                    path: "src/client.rs".to_string(),
+                    patch_coverage: Some(100.0),
+                    patch_hits: Some(67),
+                    patch_lines: Some(67),
+                    patch_misses: Some(0),
+                    base_coverage: Some(90.0),
+                    head_coverage: Some(95.0),
+                    status: "OK".to_string(),
+                    uncovered_lines: vec![],
+                },
+                ChangedFileSummary {
+                    path: "src/ops.rs".to_string(),
+                    patch_coverage: Some(8.52),
+                    patch_hits: Some(11),
+                    patch_lines: Some(129),
+                    patch_misses: Some(118),
+                    base_coverage: Some(100.0),
+                    head_coverage: Some(45.62),
+                    status: "LOW COVERAGE".to_string(),
+                    uncovered_lines: vec![10, 11, 12, 15, 20, 21, 22, 23, 24, 30],
+                },
+            ],
+        };
+        summary.print_text();
+    }
+
+    #[test]
+    fn text_format_comparison_with_files() {
+        use crate::models::{ComparisonFile, ComparisonFileName, FileTotals};
+
+        let cmp = Comparison {
+            base_commit: Some("abc".to_string()),
+            head_commit: Some("def".to_string()),
+            totals: None,
+            commit_uploads: None,
+            diff: None,
+            files: Some(vec![
+                ComparisonFile {
+                    name: Some(ComparisonFileName {
+                        base: Some("src/lib.rs".to_string()),
+                        head: Some("src/lib.rs".to_string()),
+                    }),
+                    has_diff: Some(true),
+                    stats: None,
+                    totals: Some(FileTotals {
+                        base: None,
+                        head: None,
+                        patch: Some(Totals {
+                            files: None,
+                            lines: Some(10),
+                            hits: Some(8),
+                            misses: Some(2),
+                            partials: None,
+                            coverage: Some(80.0),
+                            branches: None,
+                            methods: None,
+                            complexity: None,
+                            complexity_total: None,
+                            complexity_ratio: None,
+                            diff: None,
+                        }),
+                    }),
+                    change_summary: None,
+                    lines: None,
+                },
+                ComparisonFile {
+                    name: Some(ComparisonFileName {
+                        base: Some("src/utils.rs".to_string()),
+                        head: Some("src/utils.rs".to_string()),
+                    }),
+                    has_diff: Some(false),
+                    stats: None,
+                    totals: None,
+                    change_summary: None,
+                    lines: None,
+                },
+            ]),
             untracked: None,
         };
         cmp.print_text();
