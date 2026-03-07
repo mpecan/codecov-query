@@ -172,44 +172,66 @@ pub struct ChangedFileSummary {
 
 /// Extract uncovered (missed) line numbers from comparison file lines data.
 ///
-/// The Codecov compare API returns lines as an array of arrays. Each entry
-/// has the line number as the first element and a head coverage indicator.
-/// We look at index 0 for line number and check remaining values for
-/// miss indicators (0, `"0"`, `"miss"`, `"0/N"`, or `null`).
-pub fn extract_uncovered_lines(lines: &serde_json::Value) -> Vec<u64> {
+/// The Codecov compare API returns lines as an array of objects:
+/// ```json
+/// {"number": {"head": 42}, "coverage": {"head": 0}, "added": true, ...}
+/// ```
+/// When `added_only` is true, only lines with `"added": true` are considered
+/// (i.e. new patch lines). A line is "missed" when `coverage.head` is `0`.
+/// Lines with `null` head coverage have no data and are skipped.
+///
+/// Also handles the legacy array-of-arrays format for robustness.
+pub fn extract_uncovered_lines(lines: &serde_json::Value, added_only: bool) -> Vec<u64> {
     let Some(arr) = lines.as_array() else {
         return Vec::new();
     };
     let mut result = Vec::new();
     for entry in arr {
-        let Some(inner) = entry.as_array() else {
-            continue;
-        };
-        // Need at least a line number and one coverage value
-        if inner.len() < 2 {
-            continue;
-        }
-        let Some(line_no) = inner[0].as_u64() else {
-            continue;
-        };
-        // The head coverage is the last meaningful coverage value.
-        // Formats seen: [line, head_cov] or [line, base_cov, head_cov, ...]
-        // We check the last non-null-ish element for miss.
-        let cov_value = if inner.len() >= 3 {
-            &inner[2]
-        } else {
-            &inner[1]
-        };
-        if is_miss(cov_value) {
+        if let Some(line_no) = extract_from_object(entry, added_only) {
+            result.push(line_no);
+        } else if !added_only && let Some(line_no) = extract_from_array(entry) {
             result.push(line_no);
         }
     }
     result
 }
 
+/// Object format: `{"number": {"head": N}, "coverage": {"head": 0}, "added": bool}`
+fn extract_from_object(entry: &serde_json::Value, added_only: bool) -> Option<u64> {
+    let obj = entry.as_object()?;
+    if added_only && !obj.get("added")?.as_bool().unwrap_or(false) {
+        return None;
+    }
+    let line_no = obj.get("number")?.get("head")?.as_u64()?;
+    let head_cov = obj.get("coverage")?.get("head")?;
+    if is_miss(head_cov) && !head_cov.is_null() {
+        Some(line_no)
+    } else {
+        None
+    }
+}
+
+/// Array format: `[line_no, cov]` or `[line_no, base_cov, head_cov]`
+fn extract_from_array(entry: &serde_json::Value) -> Option<u64> {
+    let inner = entry.as_array()?;
+    if inner.len() < 2 {
+        return None;
+    }
+    let line_no = inner[0].as_u64()?;
+    let cov_value = if inner.len() >= 3 {
+        &inner[2]
+    } else {
+        &inner[1]
+    };
+    if is_miss(cov_value) {
+        Some(line_no)
+    } else {
+        None
+    }
+}
+
 fn is_miss(value: &serde_json::Value) -> bool {
     match value {
-        serde_json::Value::Null => true,
         serde_json::Value::Number(n) => n.as_f64().is_some_and(|v| v == 0.0),
         serde_json::Value::String(s) => s == "miss" || s == "0" || s.starts_with("0/"),
         serde_json::Value::Bool(b) => !b,
@@ -609,37 +631,69 @@ mod tests {
     }
 
     #[test]
-    fn extract_uncovered_lines_two_element_format() {
-        // [line_no, coverage] where "miss" or 0 means uncovered
+    fn extract_uncovered_lines_object_format_all() {
+        // Real Codecov API format, added_only=false
+        let lines: serde_json::Value = serde_json::from_str(
+            r#"[
+                {"number": {"base": 10, "head": 10}, "coverage": {"base": null, "head": 1}, "added": false},
+                {"number": {"base": 11, "head": 11}, "coverage": {"base": null, "head": 0}, "added": false},
+                {"number": {"base": null, "head": 12}, "coverage": {"base": null, "head": 0}, "added": true},
+                {"number": {"base": 13, "head": 13}, "coverage": {"base": null, "head": null}, "added": true},
+                {"number": {"base": 14, "head": 14}, "coverage": {"base": 0, "head": 1}, "added": true}
+            ]"#,
+        )
+        .unwrap();
+        let uncovered = extract_uncovered_lines(&lines, false);
+        assert_eq!(uncovered, vec![11, 12]);
+    }
+
+    #[test]
+    fn extract_uncovered_lines_object_format_added_only() {
+        let lines: serde_json::Value = serde_json::from_str(
+            r#"[
+                {"number": {"base": 10, "head": 10}, "coverage": {"base": null, "head": 0}, "added": false},
+                {"number": {"base": null, "head": 11}, "coverage": {"base": null, "head": 0}, "added": true},
+                {"number": {"base": null, "head": 12}, "coverage": {"base": null, "head": 1}, "added": true}
+            ]"#,
+        )
+        .unwrap();
+        // Only added lines with head=0
+        let uncovered = extract_uncovered_lines(&lines, true);
+        assert_eq!(uncovered, vec![11]);
+    }
+
+    #[test]
+    fn extract_uncovered_lines_array_format() {
+        // Legacy/alternative array format (added_only not applicable)
         let lines: serde_json::Value =
-            serde_json::from_str(r#"[[1, "hit"], [2, "miss"], [3, 1], [4, 0], [5, null]]"#)
-                .unwrap();
-        let uncovered = extract_uncovered_lines(&lines);
-        assert_eq!(uncovered, vec![2, 4, 5]);
+            serde_json::from_str(r#"[[1, "hit"], [2, "miss"], [3, 1], [4, 0]]"#).unwrap();
+        let uncovered = extract_uncovered_lines(&lines, false);
+        assert_eq!(uncovered, vec![2, 4]);
     }
 
     #[test]
     fn extract_uncovered_lines_three_element_format() {
-        // [line_no, base_cov, head_cov]
         let lines: serde_json::Value =
             serde_json::from_str(r#"[[10, 1, 1], [11, 1, 0], [12, null, "miss"], [13, 0, 1]]"#)
                 .unwrap();
-        let uncovered = extract_uncovered_lines(&lines);
+        let uncovered = extract_uncovered_lines(&lines, false);
         assert_eq!(uncovered, vec![11, 12]);
     }
 
     #[test]
     fn extract_uncovered_lines_empty_and_invalid() {
-        assert!(extract_uncovered_lines(&serde_json::Value::Null).is_empty());
-        assert!(extract_uncovered_lines(&serde_json::json!([])).is_empty());
-        assert!(extract_uncovered_lines(&serde_json::json!([["not_a_number", 1]])).is_empty());
+        assert!(extract_uncovered_lines(&serde_json::Value::Null, false).is_empty());
+        assert!(extract_uncovered_lines(&serde_json::json!([]), false).is_empty());
+        assert!(
+            extract_uncovered_lines(&serde_json::json!([["not_a_number", 1]]), false).is_empty()
+        );
     }
 
     #[test]
     fn extract_uncovered_lines_partial_fraction() {
         let lines: serde_json::Value =
             serde_json::from_str(r#"[[1, "0/2"], [2, "1/2"], [3, "2/2"]]"#).unwrap();
-        let uncovered = extract_uncovered_lines(&lines);
+        let uncovered = extract_uncovered_lines(&lines, false);
         assert_eq!(uncovered, vec![1]);
     }
 

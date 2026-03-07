@@ -234,7 +234,7 @@ fn comparison_file_to_summary(f: &models::ComparisonFile) -> ChangedFileSummary 
     let uncovered_lines = f
         .lines
         .as_ref()
-        .map(models::extract_uncovered_lines)
+        .map(|l| models::extract_uncovered_lines(l, true))
         .unwrap_or_default();
 
     let file_status = match file_patch_coverage {
