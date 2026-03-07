@@ -236,7 +236,7 @@ impl TextFormat for PrSummary {
 
         match (self.base_coverage, self.head_coverage) {
             (Some(base), Some(head)) => {
-                let delta = self.coverage_delta.unwrap_or(0.0);
+                let delta = self.coverage_delta.unwrap_or(head - base);
                 println!("Coverage: {base:.2}% -> {head:.2}% (delta {delta:+.2}%)");
             }
             (_, Some(head)) => println!("Coverage: {head:.2}%"),
@@ -278,11 +278,13 @@ fn print_changed_files(files: &[ChangedFileSummary]) {
         println!();
         println!("Files needing coverage:");
         for file in &needs_coverage {
-            let misses = file.patch_misses.unwrap_or(0);
+            let misses_str =
+                file.patch_misses
+                    .map_or_else(|| "N/A".to_string(), |m| format!("{m}"));
             let base_str = format_coverage_pct(file.base_coverage);
             let head_str = format_coverage_pct(file.head_coverage);
             println!(
-                "  {}: {misses} uncovered lines (was {base_str}, now {head_str})",
+                "  {}: {misses_str} uncovered lines (was {base_str}, now {head_str})",
                 file.path
             );
             if !file.uncovered_lines.is_empty() {

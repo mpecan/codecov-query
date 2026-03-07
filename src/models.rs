@@ -132,6 +132,7 @@ impl Comparison {
             files.retain(|f| f.has_diff == Some(true));
             for file in files.iter_mut() {
                 file.lines = None;
+                file.change_summary = None;
             }
         }
         self.commit_uploads = None;
@@ -189,7 +190,7 @@ pub fn extract_uncovered_lines(lines: &serde_json::Value, added_only: bool) -> V
     for entry in arr {
         if let Some(line_no) = extract_from_object(entry, added_only) {
             result.push(line_no);
-        } else if !added_only && let Some(line_no) = extract_from_array(entry) {
+        } else if let Some(line_no) = extract_from_array(entry) {
             result.push(line_no);
         }
     }
@@ -550,7 +551,7 @@ mod tests {
             "commit_uploads": { "some": "data" },
             "diff": { "some": "diff" },
             "files": [
-                { "name": { "base": "a.rs", "head": "a.rs" }, "has_diff": true, "stats": null, "totals": null, "change_summary": null, "lines": [[1, "hit"]] },
+                { "name": { "base": "a.rs", "head": "a.rs" }, "has_diff": true, "stats": null, "totals": null, "change_summary": { "some": "data" }, "lines": [[1, "hit"]] },
                 { "name": { "base": "b.rs", "head": "b.rs" }, "has_diff": false, "stats": null, "totals": null, "change_summary": null, "lines": null }
             ],
             "untracked": { "some": "data" }
@@ -567,6 +568,7 @@ mod tests {
             Some("a.rs")
         );
         assert!(files[0].lines.is_none());
+        assert!(files[0].change_summary.is_none());
     }
 
     #[test]
@@ -664,11 +666,20 @@ mod tests {
 
     #[test]
     fn extract_uncovered_lines_array_format() {
-        // Legacy/alternative array format (added_only not applicable)
+        // Legacy/alternative array format
         let lines: serde_json::Value =
             serde_json::from_str(r#"[[1, "hit"], [2, "miss"], [3, 1], [4, 0]]"#).unwrap();
         let uncovered = extract_uncovered_lines(&lines, false);
         assert_eq!(uncovered, vec![2, 4]);
+    }
+
+    #[test]
+    fn extract_uncovered_lines_array_format_with_added_only() {
+        // Array format has no "added" info, so all misses are included as fallback
+        let lines: serde_json::Value =
+            serde_json::from_str(r#"[[1, 1], [2, 0], [3, "miss"]]"#).unwrap();
+        let uncovered = extract_uncovered_lines(&lines, true);
+        assert_eq!(uncovered, vec![2, 3]);
     }
 
     #[test]
