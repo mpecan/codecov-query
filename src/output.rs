@@ -271,26 +271,9 @@ fn print_changed_files(files: &[ChangedFileSummary]) {
             status = file.status,
             path = file.path,
         );
-    }
-
-    let needs_coverage: Vec<_> = files.iter().filter(|f| f.status != "OK").collect();
-    if !needs_coverage.is_empty() {
-        println!();
-        println!("Files needing coverage:");
-        for file in &needs_coverage {
-            let misses_str = file
-                .patch_misses
-                .map_or_else(|| "N/A".to_string(), |m| format!("{m}"));
-            let base_str = format_coverage_pct(file.base_coverage);
-            let head_str = format_coverage_pct(file.head_coverage);
-            println!(
-                "  {}: {misses_str} uncovered lines (was {base_str}, now {head_str})",
-                file.path
-            );
-            if !file.uncovered_lines.is_empty() {
-                let ranges = models::format_line_ranges(&file.uncovered_lines);
-                println!("    lines: {ranges}");
-            }
+        if !file.uncovered_lines.is_empty() {
+            let ranges = models::format_line_ranges(&file.uncovered_lines);
+            println!("    uncovered lines: {ranges}");
         }
     }
 }
